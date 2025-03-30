@@ -185,6 +185,7 @@ struct GlobalLPFilter {
 
 extern struct GlobalLPFilter gGlobalLPFs[SYNTH_CHANNEL_STEREO_COUNT];
 void note_init_lpf(struct AudioLPFilter *lpf, s16 intensity, f32 gainMultiplier, s32 isNoteInit, s16 *state, s16 *coefs);
+void note_init_apolef(struct AudioLPFilter *lpf, s16 intensity, f32 gainMultiplier, s32 isNoteInit, s16 *state, s16 *coefs, f32 a1, f32 a2);
 #endif
 
 u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen);

@@ -1095,6 +1095,45 @@ void note_init_lpf(struct AudioLPFilter *lpf, s16 intensity, f32 gainMultiplier,
     lpf->state = state;
     lpf->coefs = coefs;
 }
+
+void note_init_apolef(struct AudioLPFilter *lpf, s16 intensity, f32 gainMultiplier, s32 isNoteInit, s16 *state, s16 *coefs, f32 a2, f32 a1) {
+#define LPF_SCALE 16384
+    f32 tmpFloatCoefs[2][8];
+    s16 tmpCoefs[2][8];
+    s32 tmp = intensity * LPF_SCALE;
+    s16 diff = tmp >> 15;
+
+    // Compute first four coeffs
+    tmpFloatCoefs[0][0] = a2;
+    tmpFloatCoefs[1][0] = a1;
+    tmpFloatCoefs[0][1] = a1 * a2;
+    tmpFloatCoefs[1][1] = (a1 * a1) + a2;
+
+    // Compute remaining coefficients (j and i order flopped from the usual)
+    for (s32 j = 2; j < 8; j++) {
+        for (s32 i = 0; i < 2; i++) {
+            tmpFloatCoefs[i][j] = (a2 * tmpFloatCoefs[i][j-2]) + (a1 * tmpFloatCoefs[i][j-1]);
+        }
+    }
+
+    // Convert coeffs from floats to shorts (j and i order NOT flopped from the usual)
+    for (s32 i = 0; i < ARRAY_COUNT(tmpCoefs); i++) {
+        for (s32 j = 0; j < ARRAY_COUNT(tmpCoefs[0]); j++) {
+            tmpCoefs[i][j] = roundf(tmpFloatCoefs[i][j] * LPF_SCALE);
+        }
+    }
+
+    // Do not cache coefs
+    bcopy(tmpCoefs, (void *) K0_TO_K1(coefs), sizeof(tmpCoefs));
+
+    tmp = (LPF_SCALE - ABS(diff)) * gainMultiplier;
+
+    lpf->intensity = intensity;
+    lpf->gain = CLAMP_S16(tmp);
+    lpf->noteInit = isNoteInit;
+    lpf->state = state;
+    lpf->coefs = coefs;
+}
 #endif
 
 void note_init_volume(struct Note *note) {

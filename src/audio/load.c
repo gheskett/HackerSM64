@@ -897,7 +897,7 @@ void audio_init() {
 
 #ifdef UCODE_LOW_PASS_FILTER
     for (i = 0; i < ARRAY_COUNT(gGlobalLPFs); i++) {
-        note_init_lpf(&gGlobalLPFs[i].lpf, 0, 1.0f, TRUE, gGlobalLPFs[i].state, gGlobalLPFs[i].coefs);
+        note_init_apolef(&gGlobalLPFs[i].lpf, 0x77ff, 8.0f, TRUE, gGlobalLPFs[i].state, gGlobalLPFs[i].coefs, -0.75f, 0.0f);
     }
 #endif
 }
