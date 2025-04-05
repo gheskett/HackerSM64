@@ -30,6 +30,7 @@
 #include "debug_box.h"
 #include "vc_ultra.h"
 #include "profiling.h"
+#include "debug.h"
 #include "emutest.h"
 
 // Emulators that the Instant Input patch should be applied to
@@ -348,6 +349,9 @@ void create_gfx_task_structure(void) {
     gGfxSPTask->task.t.data_size = entries * sizeof(Gfx);
     gGfxSPTask->task.t.yield_data_ptr = (u64 *) gGfxSPTaskYieldBuffer;
     gGfxSPTask->task.t.yield_data_size = OS_YIELD_DATA_SIZE;
+
+    // NOTE: 'entries' is not representative of the right-side allocations coming from the GFX pool; do not use that variable here.
+    assert_args((u8*) gDisplayListHead <= gGfxPoolEnd, "GFX pool exceeded: %d command(s) over!", ((s32) gGfxPoolEnd - (s32) gDisplayListHead) / sizeof(Gfx));
 }
 
 /**
