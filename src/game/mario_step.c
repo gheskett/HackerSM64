@@ -315,7 +315,7 @@ static s32 perform_ground_quarter_step(struct MarioState *m, Vec3f nextPos) {
 
     vec3f_set(m->pos, nextPos[0], floorHeight, nextPos[2]);
 
-    // H64 TODO: Add config opt & check if floor is slippery
+    // HACKERSM64_DO: Add config opt & check if floor is slippery
     if (!SURFACE_IS_UNSAFE(floor->type)) {
         vec3f_copy(m->lastSafePos, m->pos);
     }
@@ -407,7 +407,7 @@ struct Surface *check_ledge_grab(struct MarioState *m, struct Surface *prevWall,
         || (*ledgeFloor) == NULL
         || ledgePos[1] < nextPos[1] + 100.0f
 #ifdef DONT_LEDGE_GRAB_STEEP_SLOPES
-        || (*ledgeFloor)->normal.y < COS25 // H64 TODO: check if floor is actually slippery
+        || (*ledgeFloor)->normal.y < COS25 // HACKERSM64_DO: check if floor is actually slippery
 #endif
     ) {
         return NULL;
