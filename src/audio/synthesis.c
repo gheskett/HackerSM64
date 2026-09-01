@@ -254,9 +254,6 @@ void prepare_reverb_ring_buffer(s32 chunkLen, u32 updateIndex) {
             loopCounts[1] = item->lengthB / 2;
 
             if (gReverbDownsampleRate != 1) {
-                // NOTE: / HACKERSM64_DO: Commenting this check seems to improve runtime by about 100 microseconds (per 30fps frame),
-                // but idk enough about why it was added here in vanilla to comfortably remove it. Is it supposed to act as an
-                // optimization (that isn't actually an optimization) or is it a safety measure since it's loaded from the RSP?
                 osInvalDCache(item->toBeDownsampledLeft, DEFAULT_LEN_2CH);
             }
             
