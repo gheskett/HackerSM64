@@ -732,7 +732,7 @@ size = ALIGN16(size);
         }
     }
 
-    // DECOMP_DO: why is this guaranteed to write <= 32 entries...?
+    // HACKERSM64_DO: why is this guaranteed to write <= 32 entries...?
     // Because the buffer is small enough that more don't fit?
     arg0->persistent.entries[arg0->persistent.numEntries].id = id;
     arg0->persistent.entries[arg0->persistent.numEntries].size = size;

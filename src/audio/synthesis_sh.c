@@ -149,7 +149,7 @@ void synthesis_load_note_subs_eu(s32 updateIndex) {
     }
 }
 
-// DECOMP_DO: (Scrub C) pointless mask and whitespace
+// HACKERSM64_DO: (Scrub C) pointless mask and whitespace
 u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen) {
     s32 i, j;
     u32 *aiBufPtr;

@@ -138,7 +138,7 @@ u8 sSoundRequestCount = 0;
 // (e.g. "only if Mario's X position is between 100 and 300"), and finally a
 // fallback dynamic. Due to the encoding of the tables, the conditions must
 // come in the same order as the macros.
-// DECOMP_DO: dynamic isn't a great term for this, it means other things in music...
+// HACKERSM64_DO: dynamic isn't a great term for this, it means other things in music...
 
 enum MusicDynConditionTypes {
     MARIO_X_GE,

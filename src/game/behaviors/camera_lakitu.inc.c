@@ -2,7 +2,7 @@
 /**
  * Behavior for bhvCameraLakitu. This includes both the intro lakitu and the
  * lakitu visible in the mirror room.
- * DECOMP_DO: Processing order relative to bhvCloud
+ * HACKERSM64_DO: Processing order relative to bhvCloud
  */
 
 /**

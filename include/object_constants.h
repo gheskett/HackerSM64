@@ -2087,7 +2087,7 @@ enum oActionsSnowmansBottom {
     #define TTC_COG_BP_SHAPE_HEXAGON                        (0 << 1)
     #define TTC_COG_BP_SHAPE_TRIANGLE                       (1 << 1)
     #define TTC_COG_BP_DIR_MASK                             0x01
-    #define TTC_COG_BP_DIR_CCW                              (0 << 0) // DECOMP_DO: Check these
+    #define TTC_COG_BP_DIR_CCW                              (0 << 0) // HACKERSM64_DO: Check these
     #define TTC_COG_BP_DIR_CW                               (1 << 0)
 
 /* TTC Pit Block */

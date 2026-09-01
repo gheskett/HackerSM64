@@ -748,25 +748,25 @@ static void treat_far_home_as_mario(f32 threshold) {
     }
 }
 
-#include "behaviors/koopa.inc.c" // DECOMP_DO: Text arg field name
+#include "behaviors/koopa.inc.c" // HACKERSM64_DO: Text arg field name
 #include "behaviors/pokey.inc.c"
 #include "behaviors/swoop.inc.c"
 #include "behaviors/fly_guy.inc.c"
 #include "behaviors/goomba.inc.c"
-#include "behaviors/chain_chomp.inc.c" // DECOMP_DO: chain_chomp_sub_act_lunge documentation
-#include "behaviors/wiggler.inc.c"     // DECOMP_DO
+#include "behaviors/chain_chomp.inc.c" // HACKERSM64_DO: chain_chomp_sub_act_lunge documentation
+#include "behaviors/wiggler.inc.c"     // HACKERSM64_DO
 #include "behaviors/spiny.inc.c"
-#include "behaviors/enemy_lakitu.inc.c" // DECOMP_DO
+#include "behaviors/enemy_lakitu.inc.c" // HACKERSM64_DO
 #include "behaviors/cloud.inc.c"
-#include "behaviors/camera_lakitu.inc.c" // DECOMP_DO: 104 label, follow cam documentation
-#include "behaviors/monty_mole.inc.c"    // DECOMP_DO
+#include "behaviors/camera_lakitu.inc.c" // HACKERSM64_DO: 104 label, follow cam documentation
+#include "behaviors/monty_mole.inc.c"    // HACKERSM64_DO
 #include "behaviors/platform_on_track.inc.c"
 #include "behaviors/seesaw_platform.inc.c"
 #include "behaviors/ferris_wheel.inc.c"
-#include "behaviors/water_bomb.inc.c" // DECOMP_DO: Shadow position
+#include "behaviors/water_bomb.inc.c" // HACKERSM64_DO: Shadow position
 #include "behaviors/ttc_rotating_solid.inc.c"
 #include "behaviors/ttc_pendulum.inc.c"
-#include "behaviors/ttc_treadmill.inc.c" // DECOMP_DO
+#include "behaviors/ttc_treadmill.inc.c" // HACKERSM64_DO
 #include "behaviors/ttc_moving_bar.inc.c"
 #include "behaviors/ttc_cog.inc.c"
 #include "behaviors/ttc_pit_block.inc.c"
