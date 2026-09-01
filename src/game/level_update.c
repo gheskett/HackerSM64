@@ -362,6 +362,11 @@ void init_mario_after_warp(void) {
         gPlayerSpawnInfos[0].startAngle[0] = 0;
         gPlayerSpawnInfos[0].startAngle[1] = object->oMoveAngleYaw;
         gPlayerSpawnInfos[0].startAngle[2] = 0;
+        
+        struct Surface *floor;
+        gMarioState->lastSafePos[0] = object->oPosX;
+        gMarioState->lastSafePos[1] = find_floor(object->oPosX, object->oPosY, object->oPosZ, &floor);
+        gMarioState->lastSafePos[2] = object->oPosZ;
 
         if (marioSpawnType == MARIO_SPAWN_DOOR_WARP) {
             init_door_warp(&gPlayerSpawnInfos[0], sWarpDest.arg);
@@ -694,10 +699,9 @@ void initiate_painting_warp(void) {
 
                 play_sound(SOUND_MENU_STAR_SOUND, gGlobalSoundSource);
                 fadeout_music(398);
-#if ENABLE_RUMBLE
+
                 queue_rumble_data(80, 70);
                 queue_rumble_decay(1);
-#endif
             }
         }
     }
@@ -1044,9 +1048,7 @@ s32 play_mode_normal(void) {
             set_play_mode(PLAY_MODE_CHANGE_AREA);
         } else if (pressed_pause()) {
             lower_background_noise(1);
-#if ENABLE_RUMBLE
             cancel_rumble();
-#endif
             gCameraMovementFlags |= CAM_MOVE_PAUSE_SCREEN;
             set_play_mode(PLAY_MODE_PAUSED);
         }
@@ -1294,11 +1296,9 @@ s32 init_level(void) {
             set_background_music(gCurrentArea->musicParam, gCurrentArea->musicParam2, 0);
         }
     }
-#if ENABLE_RUMBLE
     if (gCurrDemoInput == NULL) {
         cancel_rumble();
     }
-#endif
 
     if (gMarioState->action == ACT_INTRO_CUTSCENE) {
         sound_banks_disable(SEQ_PLAYER_SFX, SOUND_BANKS_DISABLED_DURING_INTRO_CUTSCENE);
