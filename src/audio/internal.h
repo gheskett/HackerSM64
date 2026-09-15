@@ -31,6 +31,28 @@
 
 #define NO_LAYER ((struct SequenceChannelLayer *)(-1))
 
+// Flanger
+#define FLANGER_MAX_VALUE 127
+#define FLANGER_MS_VALUE 20000 // Value units per second (20000 = 0.05 ms per step)
+#define FLANGER_DELAY_SAMPLES (((((32000 * (FLANGER_MAX_VALUE + 1)) + (FLANGER_MS_VALUE - 1)) / FLANGER_MS_VALUE) + 15) & ~15)
+#define FLANGER_MIX_GAIN 0x4000
+#define FLANGER_GAIN_SLEW 0x1000
+#define FLANGER_MAX_SLEW_SAMPLES 16
+#define DMEM_ADDR_FLANGER_SOURCE 0x120
+#define DMEM_ADDR_FLANGER_OUTPUT 0x000
+#define FLANGER_DMEM_HISTORY_CAPACITY 0x1D0
+#define DMEM_ADDR_FLANGER_CURRENT 0x3A0
+#define DMEM_ADDR_FLANGER_HISTORY (DMEM_ADDR_FLANGER_CURRENT - (FLANGER_DELAY_SAMPLES * sizeof(s16)))
+#define FLANGER_DMA_SAMPLE_ALIGNMENT 4
+
+#if FLANGER_MS_VALUE <= 0
+#error "FLANGER_MS_VALUE must be greater than zero"
+#endif
+
+#if FLANGER_DELAY_SAMPLES > FLANGER_DMEM_HISTORY_CAPACITY
+#error "FLANGER_MS_VALUE requests a delay too large for the flanger DMEM workspace"
+#endif
+
 enum MuteBehaviors {
     MUTE_BEHAVIOR_STOP_SCRIPT = (1 << 7), // 0x80 // stop processing sequence/channel scripts
     MUTE_BEHAVIOR_STOP_NOTES  = (1 << 6), // 0x40 // prevent further notes from playing
@@ -706,6 +728,13 @@ struct Note {
     /*0x8C*/ struct AudioListItem listItem;
     /*0x9C*/ s16 curVolLeft; // Q1.15, but will always be non-negative
     /*0x9E*/ s16 curVolRight; // Q1.15, but will always be non-negative
+    // Delay in fractions of a millisecond (0 disables, values above 127 are clamped).
+    u16 flanger;
+    u16 prevFlanger;
+    u16 flangerDelaySamples;
+    u16 flangerResamplePhase;
+    u16 flangerTailSamples;
+    u16 flangerWetGain;
 #ifdef ENABLE_STEREO_HEADSET_EFFECTS
     /*0xA0*/ u16 headsetPanRight;
     /*0xA2*/ u16 headsetPanLeft;
@@ -730,6 +759,9 @@ struct NoteSynthesisBuffers {
     s16 dummyResampleState[0x10];
 #if defined(VERSION_JP) || defined(VERSION_US)
     s16 samples[0x40];
+    s16 flangerDelay[FLANGER_DELAY_SAMPLES];
+    s16 flangerSource[0xA8];
+    s16 flangerResampleState[0x10];
 #endif
 #endif
 };

@@ -71,6 +71,7 @@ struct VolumeChange {
 u64 *synthesis_do_one_audio_update(s16 *aiBuf, u32 bufLen, u64 *cmd, s32 updateIndex);
 u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd);
 u64 *load_wave_samples(u64 *cmd, struct Note *note, s32 nSamplesToLoad);
+u64 *apply_flanger(u64 *cmd, struct Note *note, u32 bufLen, s32 drainingTail);
 #ifdef ENABLE_STEREO_HEADSET_EFFECTS
 u64 *process_envelope(u64 *cmd, struct Note *note, s32 nSamples, u16 inBuf, s32 headsetPanSettings);
 u64 *note_apply_headset_pan_effects(u64 *cmd, struct Note *note, s32 bufLen, s32 flags, s32 leftRight);
@@ -770,6 +771,8 @@ u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd) {
             aSetBuffer(cmd++, /*flags*/ 0, noteSamplesDmemAddrBeforeResampling, /*dmemout*/ DMEM_ADDR_TEMP, bufLen);
             aResample(cmd++, flags, resamplingRateFixedPoint, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->finalResampleState));
 
+            cmd = apply_flanger(cmd, note, bufLen, FALSE);
+
 #ifdef ENABLE_STEREO_HEADSET_EFFECTS
             if (note->headsetPanRight != 0 || note->prevHeadsetPanRight != 0) {
                 leftRight = 1;
@@ -791,6 +794,25 @@ u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd) {
             cmd = process_envelope(cmd, note, bufLen, 0);
             AUDIO_PROFILER_SWITCH(PROFILER_TIME_SUB_AUDIO_SYNTHESIS_ENVELOPE_REVERB, PROFILER_TIME_SUB_AUDIO_SYNTHESIS_PROCESSING);
 #endif
+        } else if (note->prevFlanger != 0 && note->flangerTailSamples != 0) {
+            // The decoder disables a non-looping note as soon as its source
+            // ends. Continue sending silence through its delay history so the
+            // wet signal is not cut off at the following synthesis update.
+            aClearBuffer(cmd++, DMEM_ADDR_TEMP, bufLen);
+            cmd = apply_flanger(cmd, note, bufLen, TRUE);
+#ifdef ENABLE_STEREO_HEADSET_EFFECTS
+            AUDIO_PROFILER_SWITCH(PROFILER_TIME_SUB_AUDIO_SYNTHESIS_PROCESSING,
+                                  PROFILER_TIME_SUB_AUDIO_SYNTHESIS_ENVELOPE_REVERB);
+            cmd = process_envelope(cmd, note, bufLen, 0, 0);
+            AUDIO_PROFILER_SWITCH(PROFILER_TIME_SUB_AUDIO_SYNTHESIS_ENVELOPE_REVERB,
+                                  PROFILER_TIME_SUB_AUDIO_SYNTHESIS_PROCESSING);
+#else
+            AUDIO_PROFILER_SWITCH(PROFILER_TIME_SUB_AUDIO_SYNTHESIS_PROCESSING,
+                                  PROFILER_TIME_SUB_AUDIO_SYNTHESIS_ENVELOPE_REVERB);
+            cmd = process_envelope(cmd, note, bufLen, 0);
+            AUDIO_PROFILER_SWITCH(PROFILER_TIME_SUB_AUDIO_SYNTHESIS_ENVELOPE_REVERB,
+                                  PROFILER_TIME_SUB_AUDIO_SYNTHESIS_PROCESSING);
+#endif
         }
     }
 
@@ -799,6 +821,201 @@ u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd) {
     aSetBuffer(cmd++, 0, 0, DMEM_ADDR_TEMP, bufLen * 2);
     aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(aiBuf));
 
+    return cmd;
+}
+
+u64 *apply_flanger(u64 *cmd, struct Note *note, u32 bufLen, s32 drainingTail) {
+    u32 value = drainingTail ? note->prevFlanger : note->flanger;
+    u32 sampleCount = bufLen / sizeof(s16);
+    u32 mixLen = ALIGN32(bufLen);
+    u32 targetDelay;
+    u32 oldDelay;
+    u32 newDelay;
+    u32 sourceSamples;
+    u32 sourceStart;
+    u32 sourceOffset;
+    u32 sourceSaveSamples;
+    u32 resamplePhase;
+    s32 wetGainStart;
+    s32 wetGainEnd;
+    s32 disabling;
+    s32 starting;
+    u16 pitch;
+
+    if (value > FLANGER_MAX_VALUE) {
+        value = FLANGER_MAX_VALUE;
+    }
+    disabling = (value == 0);
+    if (disabling) {
+        if (note->prevFlanger == 0) {
+            return cmd;
+        }
+        value = note->prevFlanger;
+    }
+    starting = (note->prevFlanger == 0);
+
+    if (drainingTail || disabling) {
+        targetDelay = note->flangerDelaySamples;
+    } else {
+        targetDelay = (value * gAudioSessionSettings.frequency + (FLANGER_MS_VALUE / 2)) / FLANGER_MS_VALUE;
+        // The delayed tap itself may start on any sample. Only the DMA that
+        // stages its surrounding window must be aligned; sourceOffset below
+        // preserves this exact position after aligning the transfer start.
+        if (targetDelay == 0) {
+            targetDelay = 1;
+        }
+    }
+
+    // Preserve the dry update in the current-sample part of the linear DMEM
+    // workspace. This avoids a save/load round trip through DRAM.
+    aDMEMMove(cmd++, DMEM_ADDR_TEMP, DMEM_ADDR_FLANGER_CURRENT, bufLen);
+
+    if (starting) {
+        aClearBuffer(cmd++, DMEM_ADDR_FLANGER_HISTORY,
+                     FLANGER_DELAY_SAMPLES * sizeof(s16));
+        aSetBuffer(cmd++, 0, DMEM_ADDR_FLANGER_HISTORY, 0,
+                   FLANGER_DELAY_SAMPLES * sizeof(s16));
+        aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerDelay));
+        note->prevFlanger = value;
+        note->flangerDelaySamples = targetDelay;
+        note->flangerResamplePhase = 0;
+    }
+
+    // Form [previous history | current update] in DMEM. This keeps the tap
+    // and next history window contiguous across synthesis updates.
+    aSetBuffer(cmd++, 0, DMEM_ADDR_FLANGER_HISTORY, 0,
+               FLANGER_DELAY_SAMPLES * sizeof(s16));
+    aLoadBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerDelay));
+
+    oldDelay = note->flangerDelaySamples;
+    if (targetDelay > oldDelay + FLANGER_MAX_SLEW_SAMPLES) {
+        newDelay = oldDelay + FLANGER_MAX_SLEW_SAMPLES;
+    } else if (oldDelay > targetDelay + FLANGER_MAX_SLEW_SAMPLES) {
+        newDelay = oldDelay - FLANGER_MAX_SLEW_SAMPLES;
+    } else {
+        newDelay = targetDelay;
+    }
+    sourceSamples = sampleCount + oldDelay - newDelay;
+
+    // Include four preceding samples so a moving tap can seed the resampler.
+    // Align only the DMA start; retain the exact tap offset inside staging.
+    sourceStart = FLANGER_DELAY_SAMPLES - oldDelay
+                  - FLANGER_DMA_SAMPLE_ALIGNMENT;
+    sourceOffset = sourceStart & (FLANGER_DMA_SAMPLE_ALIGNMENT - 1);
+    sourceStart -= sourceOffset;
+    sourceSaveSamples = sourceSamples + FLANGER_DMA_SAMPLE_ALIGNMENT
+                        + sourceOffset;
+    aSetBuffer(cmd++, 0, 0,
+               DMEM_ADDR_FLANGER_HISTORY + sourceStart * sizeof(s16),
+               sourceSaveSamples * sizeof(s16));
+    aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerSource));
+
+    aSetBuffer(cmd++, 0, 0, DMEM_ADDR_FLANGER_HISTORY + bufLen,
+               FLANGER_DELAY_SAMPLES * sizeof(s16));
+    aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerDelay));
+    aSetBuffer(cmd++, 0, DMEM_ADDR_FLANGER_SOURCE, 0,
+               sourceSaveSamples * sizeof(s16));
+    aLoadBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerSource));
+
+    note->prevFlanger = value;
+    // Always use the same filtered path. Switching between aResample while
+    // moving and a raw copy while stationary changes phase at the boundary.
+    pitch = (sourceSamples << 15) / sampleCount;
+    if (starting) {
+        aDMEMMove(cmd++, DMEM_ADDR_FLANGER_SOURCE
+                            + sourceOffset * sizeof(s16),
+                  DMEM_ADDR_TEMP, 8);
+        aClearBuffer(cmd++, DMEM_ADDR_TEMP + 8, 8);
+        aDMEMMove(cmd++, DMEM_ADDR_FLANGER_SOURCE
+                            + sourceOffset * sizeof(s16),
+                  DMEM_ADDR_TEMP + 16, 16);
+        aSetBuffer(cmd++, 0, 0, DMEM_ADDR_TEMP, 32);
+        aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerResampleState));
+    }
+    aSetBuffer(cmd++, 0,
+               DMEM_ADDR_FLANGER_SOURCE
+                   + (sourceOffset + FLANGER_DMA_SAMPLE_ALIGNMENT)
+                         * sizeof(s16),
+               DMEM_ADDR_FLANGER_OUTPUT, bufLen);
+    aResample(cmd++, 0, pitch,
+              VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->flangerResampleState));
+
+    // Mirror the resampler's fractional source accumulator. Because pitch is
+    // quantized to UQ1.15, an update does not always consume sourceSamples
+    // exactly. Starting the following update at newDelay in that case skips a
+    // source sample at the boundary and produces an intermittent click.
+    resamplePhase = note->flangerResamplePhase + sampleCount * pitch;
+    note->flangerResamplePhase = resamplePhase & 0x7fff;
+    note->flangerDelaySamples = sampleCount + oldDelay - (resamplePhase >> 15);
+
+    if (!drainingTail && note->finished) {
+        note->flangerTailSamples = note->flangerDelaySamples;
+    } else if (drainingTail) {
+        if (note->flangerTailSamples <= sampleCount) {
+            note->flangerTailSamples = 0;
+            note->prevFlanger = 0;
+            note->flangerResamplePhase = 0;
+        } else {
+            note->flangerTailSamples -= sampleCount;
+        }
+    }
+
+    // aMix rounds its count to 32 bytes, while a 136-sample update is only
+    // 272 bytes. Clear the rounded tail so no data from the preceding update
+    // is folded into the next microcode block.
+    if (mixLen != bufLen) {
+        aClearBuffer(cmd++, DMEM_ADDR_FLANGER_CURRENT + bufLen,
+                     mixLen - bufLen);
+        aClearBuffer(cmd++, DMEM_ADDR_FLANGER_OUTPUT + bufLen, mixLen - bufLen);
+    }
+
+    wetGainStart = note->flangerWetGain;
+    if (disabling) {
+        wetGainEnd = wetGainStart - FLANGER_GAIN_SLEW;
+        if (wetGainEnd < 0) {
+            wetGainEnd = 0;
+        }
+    } else {
+        wetGainEnd = wetGainStart + FLANGER_GAIN_SLEW;
+        if (wetGainEnd > FLANGER_MIX_GAIN) {
+            wetGainEnd = FLANGER_MIX_GAIN;
+        }
+    }
+
+    if (wetGainStart == wetGainEnd) {
+        // Steady state is the common path: mix the entire update at once.
+        aSetBuffer(cmd++, 0, 0, 0, mixLen);
+        aMix(cmd++, 0, -wetGainEnd, DMEM_ADDR_FLANGER_CURRENT,
+             DMEM_ADDR_FLANGER_CURRENT);
+        aMix(cmd++, 0, wetGainEnd, DMEM_ADDR_FLANGER_OUTPUT,
+             DMEM_ADDR_FLANGER_CURRENT);
+    } else {
+        u32 mixBlocks = mixLen / 32;
+        u32 mixBlock;
+
+        // aMix operates in 32-byte units. Only transitions need the finer
+        // ramp; one aSetBuffer serves every equal-sized block.
+        aSetBuffer(cmd++, 0, 0, 0, 32);
+        for (mixBlock = 0; mixBlock < mixBlocks; mixBlock++) {
+            u32 mixOffset = mixBlock * 32;
+            s32 wetGain = wetGainStart
+                          + ((wetGainEnd - wetGainStart) * (mixBlock + 1))
+                                / mixBlocks;
+            aMix(cmd++, 0, -wetGain,
+                 DMEM_ADDR_FLANGER_CURRENT + mixOffset,
+                 DMEM_ADDR_FLANGER_CURRENT + mixOffset);
+            aMix(cmd++, 0, wetGain, DMEM_ADDR_FLANGER_OUTPUT + mixOffset,
+                 DMEM_ADDR_FLANGER_CURRENT + mixOffset);
+        }
+    }
+    note->flangerWetGain = wetGainEnd;
+
+    aDMEMMove(cmd++, DMEM_ADDR_FLANGER_CURRENT, DMEM_ADDR_TEMP, bufLen);
+
+    if (disabling && wetGainEnd == 0) {
+        note->prevFlanger = 0;
+        note->flangerResamplePhase = 0;
+    }
     return cmd;
 }
 
@@ -1038,6 +1255,12 @@ void note_init_volume(struct Note *note) {
     note->curVolLeft = 1;
     note->curVolRight = 1;
     note->frequency = 0.0f;
+    note->flanger = 0;
+    note->prevFlanger = 0;
+    note->flangerDelaySamples = 0;
+    note->flangerResamplePhase = 0;
+    note->flangerTailSamples = 0;
+    note->flangerWetGain = 0;
 }
 
 void note_set_vel_pan_reverb(struct Note *note, f32 velocity, f32 pan, u8 reverbVol) {
@@ -1108,11 +1331,22 @@ void note_set_frequency(struct Note *note, f32 frequency) {
     note->frequency = frequency;
 }
 
+void note_set_flanger(struct Note *note, u8 flanger) {
+    note->flanger = (flanger > FLANGER_MAX_VALUE) ? FLANGER_MAX_VALUE : flanger;
+}
+
 void note_enable(struct Note *note) {
     note->enabled = TRUE;
     note->needsInit = TRUE;
     note->restart = FALSE;
     note->finished = FALSE;
+    // A note slot may be reused before the preceding note's delayed tail has
+    // drained. The new note must never inherit that tail or resampler phase.
+    note->prevFlanger = 0;
+    note->flangerDelaySamples = 0;
+    note->flangerResamplePhase = 0;
+    note->flangerTailSamples = 0;
+    note->flangerWetGain = 0;
 #ifdef ENABLE_STEREO_HEADSET_EFFECTS
     note->stereoStrongRight = FALSE;
     note->stereoStrongLeft = FALSE;

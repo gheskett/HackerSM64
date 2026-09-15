@@ -153,7 +153,7 @@ extern u32 gAudioRandom;
 #if defined(VERSION_US) || defined(VERSION_JP)
 #define NOTES_BUFFER_SIZE \
 ( \
-    MAX_SIMULTANEOUS_NOTES * ((4 /* updatesPerFrame */ * 20 * 2 * sizeof(u64)) \
+    MAX_SIMULTANEOUS_NOTES * ((4 /* updatesPerFrame */ * 64 * 2 * sizeof(u64)) \
     + ALIGN16(sizeof(struct Note)) \
     + (DMA_BUF_SIZE_0 * 3) \
     + DMA_BUF_SIZE_1 \

@@ -179,6 +179,7 @@ u64 *synthesis_execute(u64 *cmdBuf, s32 *writtenCmds, s16 *aiBuf, s32 bufLen);
 void note_init_volume(struct Note *note);
 void note_set_vel_pan_reverb(struct Note *note, f32 velocity, f32 pan, u8 reverbVol);
 void note_set_frequency(struct Note *note, f32 frequency);
+void note_set_flanger(struct Note *note, u8 flanger);
 void note_enable(struct Note *note);
 void note_disable(struct Note *note);
 #endif
