@@ -477,6 +477,148 @@ u64 *synthesis_do_one_audio_update(s16 *aiBuf, u32 bufLen, u64 *cmd, s32 updateI
     return cmd;
 }
 
+#ifdef VERSION_US
+#include "phaser_tables.inc.c"
+
+// Both work buffers have room for 160 samples plus an eight-byte history prefix.
+// They are free between final resampling and envelope/headset processing.
+#define PHASER_SIGNAL 0x160
+#define PHASER_DELAY  0x2B0
+
+// Every fade uses A_INIT, so its write-only envelope save area can be shared
+// by all notes and updates. RSP commands execute in order; the CPU never reads it.
+static s16 sPhaserEnvelopeState[0x28] __attribute__((aligned(16)));
+
+// ENVMIXER interpolates volume within each eight-sample group. Pick a
+// power-of-two ramp length no longer than this update, so the target is reached
+// before returning. sqrtf maps to the CPU's hardware square-root instruction.
+static s32 phaser_fade_rate(s32 source, s32 target, s32 size) {
+    f32 rate = (f32) target / source;
+    s32 groups;
+    for (groups = 2; groups <= size / 16; groups *= 2) {
+        rate = sqrtf(rate);
+    }
+    return (s32) (rate * 65536.0f) + (target > source);
+}
+
+static u64 *note_apply_phaser(u64 *cmd, struct Note *note, s32 size, s32 flags) {
+    s32 value = MIN(note->phaser, 127);
+    s32 target;
+    s32 step = MAX(1, size / 128);
+    s32 stage;
+    s32 init;
+    s32 coefficient;
+    s32 magnitude;
+    s32 wetPolarity = NOTE_PHASER_INVERT_WET ? -1 : 1;
+    s32 in = PHASER_SIGNAL;
+    s32 out = PHASER_DELAY;
+    s32 swap;
+    s32 sourceWet;
+    s32 targetWet;
+    s32 ramp;
+    s16 *state;
+
+    if (flags & A_INIT) {
+        note->phaserActive = FALSE;
+        // A new note has no preceding dry signal to crossfade from. Apply its
+        // requested tone from the first sample; the note's volume envelope
+        // handles the attack. Mid-note activation still uses the wet fade.
+        note->phaserWet = value ? 16384 : 0;
+    }
+    if (value == 0 && note->phaserWet == 0) {
+        note->phaserActive = FALSE;
+        return cmd;
+    }
+
+    target = value ? value - 1 : note->phaserIndex;
+    init = !note->phaserActive;
+    if (init) {
+        note->phaserIndex = target;
+        note->phaserActive = TRUE;
+    }
+    // Coefficients now change once per synthesis update, not every 16 samples.
+    // A slower slew limits zipper noise without repeated filter/state DMA.
+    if (note->phaserIndex < target) {
+        note->phaserIndex = MIN(note->phaserIndex + step, target);
+    } else if (note->phaserIndex > target) {
+        note->phaserIndex = MAX(note->phaserIndex - step, target);
+    }
+    // The first feedback entry is a itself: keep feed-forward and feedback
+    // coefficients tied to the same generated sweep, with no extra table.
+    coefficient = sPhaserBook[note->phaserIndex][8];
+    magnitude = coefficient < 0 ? -coefficient : coefficient;
+    sourceWet = MAX(1, note->phaserWet);
+    if (value) {
+        note->phaserWet = MIN(note->phaserWet + size * 8, 16384);
+    } else {
+        note->phaserWet = MAX((s32) note->phaserWet - size * 8, 0);
+    }
+    targetWet = MAX(1, note->phaserWet);
+
+    aClearBuffer(cmd++, in, ALIGN16(size + 16));
+    aSetBuffer(cmd++, 0, 0, 0, size);
+    aMix(cmd++, 0, 0x2000, DMEM_ADDR_TEMP, in);
+
+    for (stage = 0; stage < NOTE_PHASER_STAGES; stage++) {
+        state = note->synthesisBuffers->phaserState[stage];
+        if (init) {
+            aClearBuffer(cmd++, out, 16);
+            // POLEF's original A_INIT path only clears half its scratch state.
+            aSetBuffer(cmd++, 0, 0, out, 8);
+            aSaveBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(state));
+        } else {
+            aSetBuffer(cmd++, 0, out, 0, 8);
+            aLoadBuffer(cmd++, VIRTUAL_TO_PHYSICAL2(state));
+        }
+        // u[n] = (1-|a|)*x[n] + a*u[n-1];
+        // y[n] = (1+|a|)*u[n-1] - a*x[n]. This realizes the same all-pass
+        // for either sign of a. Negative poles extend the sweep above the
+        // positive-pole limit without exceeding POLEF's 0x3fff gain limit.
+        // POLEF modifies its DMEM book, so reload it for every stage.
+        aLoadADPCM(cmd++, sizeof(sPhaserBook[0]), VIRTUAL_TO_PHYSICAL2(sPhaserBook[note->phaserIndex]));
+        aSetBuffer(cmd++, 0, in, out + 8, size);
+        aPoleFilter(cmd++, A_CONTINUE, MIN(16384 - magnitude, 0x3fff), VIRTUAL_TO_PHYSICAL2(state));
+        aDMEMMove(cmd++, out + 6, out, size);
+        aMix(cmd++, 0, magnitude * 2, out, out);
+        aMix(cmd++, 0, -coefficient * 2, in, out);
+        swap = in;
+        in = out;
+        out = swap;
+    }
+
+    if (sourceWet == 16384 && targetWet == 16384) {
+        // Equal dry/wet magnitudes give maximum cancellation. Inverting wet
+        // swaps the pass bands and notches for a more hollow, bass-cut tone.
+        aSetBuffer(cmd++, 0, 0, 0, size);
+        aMix(cmd++, 0, -16384, DMEM_ADDR_TEMP, DMEM_ADDR_TEMP);
+        aMix(cmd++, 0, wetPolarity * 32767, in, DMEM_ADDR_TEMP);
+        aMix(cmd++, 0, wetPolarity * 32767, in, DMEM_ADDR_TEMP);
+    } else {
+        // Form (allpass - polarity*dry)/2 and apply polarity in ENVMIXER,
+        // then ramp the resulting (polarity*allpass - dry)/2 into the dry
+        // signal. Two half-volume envelope outputs keep the stock exponential
+        // ramp safely below its signed 16.16 overflow limit near unity gain.
+        aMix(cmd++, 0, -wetPolarity * 8192, DMEM_ADDR_TEMP, in);
+        aMix(cmd++, 0, 32767, in, in);
+        aClearBuffer(cmd++, out, ALIGN16(size + 16));
+        ramp = phaser_fade_rate(sourceWet, targetWet, size);
+        aSetBuffer(cmd++, 0, in, DMEM_ADDR_TEMP, size);
+        aSetBuffer(cmd++, A_AUX, out, 0, 0);
+        aSetVolume(cmd++, A_VOL | A_LEFT, sourceWet, 0, 0);
+        aSetVolume(cmd++, A_VOL | A_RIGHT, sourceWet, 0, 0);
+        aSetVolume32(cmd++, A_RATE | A_LEFT, targetWet, ramp);
+        aSetVolume32(cmd++, A_RATE | A_RIGHT, targetWet, ramp);
+        aSetVolume(cmd++, A_AUX, wetPolarity * 32767, 0, 0);
+        aEnvMixer(cmd++, A_INIT, VIRTUAL_TO_PHYSICAL(sPhaserEnvelopeState));
+        aMix(cmd++, 0, 32767, out, DMEM_ADDR_TEMP);
+    }
+    if (note->phaserWet == 0) {
+        note->phaserActive = FALSE;
+    }
+    return cmd;
+}
+#endif
+
 u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd) {
     s32 noteIndex;                           // sp174
     struct Note *note;                       // s7
@@ -769,6 +911,23 @@ u64 *synthesis_process_notes(s16 *aiBuf, u32 bufLen, u64 *cmd) {
             // final resample
             aSetBuffer(cmd++, /*flags*/ 0, noteSamplesDmemAddrBeforeResampling, /*dmemout*/ DMEM_ADDR_TEMP, bufLen);
             aResample(cmd++, flags, resamplingRateFixedPoint, VIRTUAL_TO_PHYSICAL2(note->synthesisBuffers->finalResampleState));
+
+#ifdef VERSION_US
+            // note->phaser = 63.0f * sins(0x10000 * (gGlobalTimer % 256) / 256) + 64;
+
+            if (gPlayer1Controller->buttonDown & R_JPAD && note->phaser < 127) {
+                note->phaser++;
+            }
+            if (gPlayer1Controller->buttonDown & L_JPAD && note->phaser > 0) {
+                note->phaser--;
+            }
+
+            if (note->phaser != 0 || note->phaserActive) {
+                cmd = note_apply_phaser(cmd, note, bufLen, flags);
+                // POLEF and ADPCM share the microcode's predictor table.
+                curLoadedBook = NULL;
+            }
+#endif
 
 #ifdef ENABLE_STEREO_HEADSET_EFFECTS
             if (note->headsetPanRight != 0 || note->prevHeadsetPanRight != 0) {
@@ -1108,7 +1267,19 @@ void note_set_frequency(struct Note *note, f32 frequency) {
     note->frequency = frequency;
 }
 
+#ifdef VERSION_US
+void note_set_phaser(struct Note *note, s32 phaser) {
+    note->phaser = MAX(0, MIN(phaser, 127));
+}
+#endif
+
 void note_enable(struct Note *note) {
+#ifdef VERSION_US
+    note->phaser = 0;
+    note->phaserActive = FALSE;
+    note->phaserIndex = 0;
+    note->phaserWet = 0;
+#endif
     note->enabled = TRUE;
     note->needsInit = TRUE;
     note->restart = FALSE;

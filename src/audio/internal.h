@@ -713,10 +713,26 @@ struct Note {
     /*0xA6*/ u16 prevHeadsetPanLeft;
     /*    */ u8 align16Padding[0x08];
 #endif
-}; // size = 0xA0, 0xB0
+#ifdef VERSION_US
+    u8 phaser; // 0: bypass; 1..127: low-to-high notch sweep. Set on the audio thread.
+    u8 phaserActive;
+    u16 phaserIndex;
+    u16 phaserWet;
+#endif
+}; // size = 0xA0, 0xB0 before optional effects
 #endif
 
 struct NoteSynthesisBuffers {
+#ifdef VERSION_US
+#if NOTE_PHASER_STAGES != 2 && NOTE_PHASER_STAGES != 4
+#error "NOTE_PHASER_STAGES must be 2 or 4"
+#endif
+#if NOTE_PHASER_INVERT_WET != 0 && NOTE_PHASER_INVERT_WET != 1
+#error "NOTE_PHASER_INVERT_WET must be 0 or 1"
+#endif
+    // One POLEF history per stage, each on an eight-byte DMA boundary.
+    s16 phaserState[NOTE_PHASER_STAGES][4];
+#endif
     s16 adpcmdecState[0x10];
     s16 finalResampleState[0x10];
 #ifdef VERSION_SH

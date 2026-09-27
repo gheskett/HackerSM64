@@ -13,6 +13,13 @@
 
 #define NUMAIBUFFERS 3
 
+// One pass per all-pass stage plus an RSP wet/dry ramp, including activation.
+#ifdef VERSION_US
+#define NOTE_SYNTHESIS_COMMANDS (20 + 15 + 9 * NOTE_PHASER_STAGES)
+#else
+#define NOTE_SYNTHESIS_COMMANDS 20
+#endif
+
 #if defined(VERSION_EU)
 #define DMA_BUF_SIZE_0 0x400
 #define DMA_BUF_SIZE_1 0x200
@@ -153,7 +160,7 @@ extern u32 gAudioRandom;
 #if defined(VERSION_US) || defined(VERSION_JP)
 #define NOTES_BUFFER_SIZE \
 ( \
-    MAX_SIMULTANEOUS_NOTES * ((4 /* updatesPerFrame */ * 20 * 2 * sizeof(u64)) \
+    MAX_SIMULTANEOUS_NOTES * ((4 /* updatesPerFrame */ * NOTE_SYNTHESIS_COMMANDS * 2 * sizeof(u64)) \
     + ALIGN16(sizeof(struct Note)) \
     + (DMA_BUF_SIZE_0 * 3) \
     + DMA_BUF_SIZE_1 \

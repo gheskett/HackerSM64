@@ -1370,7 +1370,7 @@ void audio_reset_session(void) {
 #else
     gTempoInternalToExternal = (u32)(updatesPerFrame * 2880000.0f / gTatumsPerBeat / 16.713f);
 #endif
-    gMaxAudioCmds = gMaxSimultaneousNotes * 20 * updatesPerFrame + 320;
+    gMaxAudioCmds = gMaxSimultaneousNotes * NOTE_SYNTHESIS_COMMANDS * updatesPerFrame + 320;
 #endif
 
 #if defined(VERSION_SH)
